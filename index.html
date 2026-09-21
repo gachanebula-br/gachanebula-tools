@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calculadora de Pity Gacha | Genshin, Honkai Star Rail e ZZZ</title>
+<meta name="description" content="Calculadora gratuita de pity para jogos gacha. Descubra a chance de conseguir o personagem 5★ em destaque, com soft pity, hard pity e 50/50.">
+<style>
+  :root {
+    --bg: #211b3d;
+    --panel: #2d2650;
+    --line: #4a4180;
+    --ink: #f1edff;
+    --muted: #b3aad8;
+    --accent: #ffb86b;
+    --good: #7be0b4;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "Avenir Next", "Segoe UI", Roboto, sans-serif; line-height: 1.55;
+  }
+  main { max-width: 860px; margin: 0 auto; padding: 32px 18px 48px; }
+  h1 { font-size: 1.9rem; margin: 0 0 6px; }
+  p.lead { color: var(--muted); margin: 0 0 24px; max-width: 60ch; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; }
+  label { display: block; font-size: .9rem; color: var(--muted); }
+  input[type=number] {
+    width: 100%; margin-top: 4px; padding: 10px 12px; font-size: 1rem;
+    background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px;
+  }
+  input:focus-visible, button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .check { display: flex; gap: 8px; align-items: center; margin-top: 18px; color: var(--ink); }
+  .presets { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+  button {
+    background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+    padding: 8px 14px; border-radius: 999px; cursor: pointer; font-size: .9rem;
+  }
+  button:hover { border-color: var(--accent); }
+  .results { margin-top: 28px; display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; }
+  .stat { background: var(--panel); border-left: 4px solid var(--accent); padding: 12px 14px; border-radius: 6px; }
+  .stat b { display: block; font-size: 1.6rem; color: var(--accent); }
+  .stat span { font-size: .85rem; color: var(--muted); }
+  .chart { margin-top: 28px; background: var(--panel); border-radius: 10px; padding: 12px; overflow-x: auto; }
+  .chart h2 { font-size: 1rem; margin: 0 0 8px; }
+  svg { width: 100%; height: auto; min-width: 460px; }
+  footer { margin-top: 32px; color: var(--muted); font-size: .85rem; }
+  footer a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Calculadora de Pity Gacha</h1>
+  <p class="lead">Descubra a chance de conseguir o personagem 5★ e quantos pulls você deve precisar, com base no seu pity atual.</p>
+
+  <div class="presets" aria-label="Predefinições">
+    <button type="button" data-p="0.6,74,90,50">Personagem (Genshin / HSR / ZZZ)</button>
+    <button type="button" data-p="0.7,62,80,75">Arma Genshin</button>
+    <button type="button" data-p="0.8,66,80,75">Cone de Luz HSR</button>
+    <button type="button" data-p="1.0,65,80,75">Motor-W ZZZ</button>
+  </div>
+
+  <div class="grid">
+    <label>Chance base 5★ (%)<input id="base" type="number" step="0.1" min="0.01" max="100" value="0.6"></label>
+    <label>Soft pity começa no pull<input id="soft" type="number" min="1" value="74"></label>
+    <label>Hard pity (garantido) no pull<input id="hard" type="number" min="2" value="90"></label>
+    <label>Chance do destaque (%)<input id="feat" type="number" min="1" max="100" value="50"></label>
+    <label>Pity atual (pulls desde o último 5★)<input id="pity" type="number" min="0" value="0"></label>
+    <label>Pulls disponíveis<input id="pulls" type="number" min="1" value="80"></label>
+  </div>
+  <label class="check"><input id="guar" type="checkbox"> Próximo 5★ já é garantido (perdeu o 50/50 antes)</label>
+
+  <div class="results" id="results" aria-live="polite"></div>
+
+  <div class="chart">
+    <h2>Chance acumulada de conseguir o personagem destaque</h2>
+    <div id="chart"></div>
+  </div>
+
+  <footer>
+    Estimativa com modelo simplificado: a chance sobe de forma linear do soft pity até o hard pity. Os valores reais variam por jogo e podem mudar com atualizações; confira as regras oficiais do seu jogo.
+    Mais guias e ferramentas em <a href="https://gachanebula-games.com/">Gacha Nebula</a>.
+  </footer>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+
+function rate(n, base, soft, hard) {
+  if (n >= hard) return 1;
+  if (n < soft) return base;
+  return Math.min(1, base + (1 - base) * (n - soft + 1) / (hard - soft + 1));
+}
+
+function simulate(o) {
+  // estados ainda sem o destaque: [pity][garantido]
+  let st = [];
+  for (let i = 0; i < o.hard; i++) st.push([0, 0]);
+  st[Math.min(o.pity, o.hard - 1)][o.guar ? 1 : 0] = 1;
+  const curve = [0];
+  let done = 0, expected = 0, p50 = null, p90 = null;
+  const limit = o.hard * 2 + 2;
+  for (let t = 1; t <= limit; t++) {
+    expected += 1 - done;
+    const next = [];
+    for (let i = 0; i < o.hard; i++) next.push([0, 0]);
+    for (let p = 0; p < o.hard; p++) {
+      for (let g = 0; g < 2; g++) {
+        const m = st[p][g];
+        if (!m) continue;
+        const r = rate(p + 1, o.base, o.soft, o.hard);
+        if (r < 1) next[p + 1][g] += m * (1 - r);
+        const hit = m * r;
+        if (g) done += hit;
+        else { done += hit * o.feat; next[0][1] += hit * (1 - o.feat); }
+      }
+    }
+    st = next;
+    curve.push(done);
+    if (p50 === null && done >= 0.5) p50 = t;
+    if (p90 === null && done >= 0.9) p90 = t;
+    if (done > 0.99999) break;
+  }
+  return { curve, expected, p50, p90 };
+}
+
+function fmt(x) { return (x * 100).toFixed(1).replace(".", ",") + "%"; }
+
+function draw(curve, marker) {
+  const W = 700, H = 260, L = 44, B = 32, T = 10, R = 12;
+  const n = curve.length - 1;
+  const x = i => L + (W - L - R) * i / n;
+  const y = v => T + (H - T - B) * (1 - v);
+  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Gráfico de probabilidade acumulada">`;
+  for (let g = 0; g <= 4; g++) {
+    const v = g / 4;
+    s += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="#4a4180" stroke-width="1"/>`;
+    s += `<text x="${L - 6}" y="${y(v) + 4}" fill="#b3aad8" font-size="11" text-anchor="end">${v * 100}%</text>`;
+  }
+  const step = Math.max(10, Math.round(n / 8 / 10) * 10);
+  for (let i = 0; i <= n; i += step) {
+    s += `<text x="${x(i)}" y="${H - 10}" fill="#b3aad8" font-size="11" text-anchor="middle">${i}</text>`;
+  }
+  const pts = curve.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  s += `<polyline points="${pts}" fill="none" stroke="#ffb86b" stroke-width="2.5"/>`;
+  if (marker > 0 && marker <= n) {
+    s += `<line x1="${x(marker)}" x2="${x(marker)}" y1="${T}" y2="${H - B}" stroke="#7be0b4" stroke-dasharray="4 4"/>`;
+    s += `<circle cx="${x(marker)}" cy="${y(curve[marker])}" r="4.5" fill="#7be0b4"/>`;
+  }
+  return s + "</svg>";
+}
+
+function run() {
+  const hard = Math.max(2, parseInt($("hard").value) || 90);
+  const o = {
+    base: Math.min(1, Math.max(0.0001, (parseFloat($("base").value) || 0.6) / 100)),
+    soft: Math.min(hard, Math.max(1, parseInt($("soft").value) || 74)),
+    hard,
+    feat: Math.min(1, Math.max(0.01, (parseFloat($("feat").value) || 50) / 100)),
+    pity: Math.max(0, parseInt($("pity").value) || 0),
+    guar: $("guar").checked
+  };
+  const pulls = Math.max(1, parseInt($("pulls").value) || 1);
+  const r = simulate(o);
+  const at = Math.min(pulls, r.curve.length - 1);
+  $("results").innerHTML = `
+    <div class="stat"><b>${fmt(r.curve[at])}</b><span>chance de ter o destaque em ${pulls} pulls</span></div>
+    <div class="stat"><b>${r.expected.toFixed(1).replace(".", ",")}</b><span>pulls esperados em média</span></div>
+    <div class="stat"><b>${r.p50 ?? "—"}</b><span>pulls para 50% de chance</span></div>
+    <div class="stat"><b>${r.p90 ?? "—"}</b><span>pulls para 90% de chance</span></div>`;
+  $("chart").innerHTML = draw(r.curve, at);
+}
+
+document.querySelectorAll("input").forEach(el => el.addEventListener("input", run));
+document.querySelectorAll(".presets button").forEach(b => b.addEventListener("click", () => {
+  const [base, soft, hard, feat] = b.dataset.p.split(",");
+  $("base").value = base; $("soft").value = soft; $("hard").value = hard; $("feat").value = feat;
+  run();
+}));
+run();
+</script>
+</body>
+</html>
